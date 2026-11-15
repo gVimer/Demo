@@ -206,9 +206,9 @@ class ILabel(QLabel):
     m.addAction(QAction(I, '删 除 样 式', m, triggered = self.DelStyle))
     m.addAction(QAction(I, '裁 剪 尺 寸', m, triggered = self.CropSize))
     m.addAction(QAction(I, '去 掉 声 音', m, triggered = self.DelVoice))
-    m.addAction(QAction(I, '转 成 图 片', m, triggered = self.VideoImg))
     m.addAction(QAction(I, '保 持 比 例', m, triggered = self.SelScale))
     m.addAction(QAction(I, '打 印 信 息', m, triggered = self.LogInfo ))
+    m.addAction(QAction(I, '转 成 图 片', m, triggered = self.VideoImg))
     m.triggered.connect(self.MenuSlot)
     m.exec_(QCursor.pos())
 
@@ -340,11 +340,12 @@ class ILabel(QLabel):
 
   def SetRect(self,R:QRect=None):
     R = R or self.Rect
-    '''修正CalcRect()相差一个像素的问题'''
-    if R.x()+R.width()+1==self.ParentOBJ.CanvasW:
-      R.setWidth(R.width()+1)
-    if R.y()+R.height()+1==self.ParentOBJ.CanvasH:
-      R.setHeight(R.height()+1)
+    if not self.KeepScaleRate:
+      '''修正CalcRect()相差一个像素的问题'''
+      if R.x()+R.width()+1==self.ParentOBJ.CanvasW:
+        R.setWidth(R.width()+1)
+      if R.y()+R.height()+1==self.ParentOBJ.CanvasH:
+        R.setHeight(R.height()+1)
     self.Rect = R
     self.Pos  = R.topLeft()
     FW = self.ParentOBJ.FrameW
@@ -536,7 +537,10 @@ class JigSaw(QMainWindow):
       WH = CH+2*BW+2*self.SpaceTB
       WX = (Screen.width() -WW)//2
       WY = (Screen.height()-WH)//2
+      self.SkipRse = True
       self.setGeometry(WX+1,WY+1,WW,WH)
+      self.SkipRse = False
+      self.CalcRect()
     self.setWindowTitle(f"拼图小工具({CW}*{CH})")
     self.PanelL = self.PanelL or QLabel(self)
     '''加边框不会改变原大小-所以这里先把边框尺寸加上'''
@@ -563,13 +567,14 @@ class JigSaw(QMainWindow):
     self.ChildL.append(Btn)
     return Btn
 
-  def __init__(self,W=804,H=804):
+  def __init__(self,W=804,H=575):
     super(JigSaw,self).__init__()
     self.PyqPicW    : int    = 258
     self.PyqPicH    : int    = 258
     self.PyqSpace   : int    = 15
     self.CanvasW    : int    = W
     self.CanvasH    : int    = H
+    self.SkipRse    : bool   = False
     self.SpaceLR    : int    = 1
     self.SpaceTB    : int    = 1
     self.BorderW    : int    = 5
@@ -711,13 +716,13 @@ class JigSaw(QMainWindow):
     self.CvSzBox = IComboBox(self)
     self.CvSzBox.activated.connect(self.SelCanvasSize)
     self.CvSzBox.setFixedHeight(30)
-    self.CvSzBox.addItems(["804*804","512*680","680*512","536*178","428*766","428*604","440*816"])
+    self.CvSzBox.addItems(["804*804","512*680","680*512","536*178","428*766","428*604","440*816","640*1150"])
     self.ChildL.append(self.CvSzBox)
 
     self.SaveLayBtn = self.GenBtn(self,"保 存 布 局",lambda:self.LocalLayData(0))
     self.LoadLayBtn = self.GenBtn(self,"加 载 布 局",lambda:self.LocalLayData(1))
     self.MergRlsBtn = self.GenBtn(self,"合 并 输 出",lambda:self.Render(True,2))
-    self.PartRlsBtn = self.GenBtn(self,"部 分 发 布",lambda:self.Render(True,1))
+    self.PartRlsBtn = self.GenBtn(self,"发 布 预 览",lambda:self.Render(True,1))
     self.FullRlsBtn = self.GenBtn(self,"完 整 发 布",lambda:self.Render(True,0))
     QTimer.singleShot(10,self.ShowAftWinSzChange)
   
@@ -902,21 +907,24 @@ class JigSaw(QMainWindow):
   def resizeEvent(self,e:QResizeEvent):
     WinW = e.size().width()
     WinH = e.size().height()
-    for e in self.LabOBJs:
-      if e.ClipOBJ:
+    if self.SkipRse:
+      return
+    for o in self.LabOBJs:
+      if o.ClipOBJ:
         '''奇数尺寸在有些播放器上无法播放'''
         if WinW%2==1: WinW = WinW-1
         if WinH%2==1: WinH = WinH-1
         break
     self.CanvasW = WinW - self.PanelRW-3*self.BorderW-2*self.SpaceLR
+    self.SpaceTB = 1
     self.CanvasH = WinH - 2*self.BorderW-2*self.SpaceTB
-    self.onWinSzChange()
-    self.CalcRect()
+    self.onWinSzChange(True)
     self.CurSelI = min(self.CurSelI,len(self.LabOBJs))
     if len(self.LabOBJs)==0:
       self.CurSelI = -1
     self.Ref()
     self.ValChange()
+    super().resizeEvent(e)
 
   def PlayVoice(self,Path:str):
     if HasFile(Path):
@@ -1205,7 +1213,11 @@ class JigSaw(QMainWindow):
       return False
     SelO = self.LabOBJs[self.CurSelI]
     SelR = SelO.GetRect()
-    OBJs = [e for e in self.LabOBJs if e!=SelO]
+    '''拖动悬浮对象的时候不联动其它对象'''
+    if self.IsSpecOne(SelO):
+      OBJs = []
+    else:
+      OBJs = [e for e in self.LabOBJs if e!=SelO]
     if Key==Qt.Key_W:
       if SelR.y()==0 or ReSize:
         if SelR.bottom()+1==self.CanvasH:
@@ -2119,6 +2131,12 @@ class JigSaw(QMainWindow):
           self.PlayVoice(M["BgM"])
           '''模板选择CB更新'''
           self.Ref()
+          """右边按钮会随文件的数量显隐故需调整窗口高度"""
+          self.onWinSzChange(True)
+          '''TODO优化:被标准模板覆盖了故再设置一次``'''
+          for i in range(len(L)):
+            Log(i,L2R(L[i]))
+            self.LabOBJs[i].SetRect(L2R(L[i]))
         '''避免加载卡住'''
         QTimer.singleShot(1,DelayCall)
 
@@ -2342,7 +2360,6 @@ class JigSaw(QMainWindow):
       FrameC = [255,255,255]
     else:
       FrameC = Colors[1]
-    MarEff  = Margin(margin_size=self.FrameW*self.ScaleW,color=FrameC)
     Clips:list[VideoClip] = []
     Voics   = []
     Times   = []
@@ -2351,6 +2368,7 @@ class JigSaw(QMainWindow):
     FzTimes = [0]*FileN
     MaxTime = 0
     SumTime = 0
+    MarEff  = Margin(margin_size=self.FrameW*self.ScaleW,color=FrameC)
     '''如果只有两个文件:一个是视频一个是图片确保图片在上面'''
     if FileN==2 and self.LabOBJs[0].ClipOBJ==None and self.LabOBJs[1].ClipOBJ:
       self.LabOBJs.reverse()
@@ -2371,7 +2389,7 @@ class JigSaw(QMainWindow):
         '''直接使用原对象会导致闪退'''
         OBJ = VideoFileClip(e.ClipOBJ.filename)
         if RenderMode==1:
-          OBJ = OBJ.subclipped(0,5)
+          OBJ = OBJ.subclipped(0,2)
         if not e.VideoVoice:
           OBJ = OBJ.without_audio()
         if OBJ.audio:
@@ -2461,7 +2479,7 @@ class JigSaw(QMainWindow):
             Voics.pop()
             Clips[i] = Loop(duration=PlayTime).apply(Clips[i])
           else:
-            Clips[i] = SetClipFreeze(Clips[i],FzTimes[i],PlayTime,False,IsSpec)
+            Clips[i] = SetClipFreeze(Clips[i],FzTimes[i],PlayTime,True,IsSpec)
         else:
           LoopEff = Loop(duration=PlayTime)
           Clips[i]= LoopEff.apply(Clips[i])
@@ -2496,8 +2514,6 @@ class JigSaw(QMainWindow):
         else:
           FinalAudio = concatenate_audioclips(Voics)
       FinalClip = FinalClip.with_audio(FinalAudio)
-    if FinalClip.duration>300:
-      FinalClip = FinalClip.subclipped(0,300)
     SaveClip(FinalClip,IsGif=not IsVideo)
     for e in Clips:
       e.close()
